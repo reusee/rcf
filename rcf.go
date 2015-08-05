@@ -33,10 +33,25 @@ func (f *File) Close() error {
 	return f.file.Close()
 }
 
-func New(path string, colSets [][]string, colSetsFn func(int) interface{}) (*File, error) {
+func New(path string, colSetsFn func(int) interface{}) (*File, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, makeErr(err, "open file")
+	}
+	n := 0
+	colSets := [][]string{}
+	for {
+		v := colSetsFn(n)
+		if v == nil {
+			break
+		}
+		t := reflect.TypeOf(v).Elem()
+		set := []string{}
+		for i, max := 0, t.NumField(); i < max; i++ {
+			set = append(set, t.Field(i).Name)
+		}
+		colSets = append(colSets, set)
+		n++
 	}
 	ret := &File{
 		file:      file,

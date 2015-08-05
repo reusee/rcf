@@ -31,11 +31,7 @@ func TestBasics(t *testing.T) {
 	var err error
 
 	open := func() {
-		f, err = New(path, [][]string{
-			{"Foo"},
-			{"Bar", "Baz"},
-			{"Qux", "Quux"},
-		}, func(i int) (ret interface{}) {
+		f, err = New(path, func(i int) (ret interface{}) {
 			switch i {
 			case 0:
 				ret = &struct {
