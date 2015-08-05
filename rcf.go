@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -162,7 +163,14 @@ func (f *File) Append(rows, meta interface{}) error {
 	for n, set := range f.colSets {
 		s := reflect.ValueOf(f.colSetsFn(n))
 		for _, col := range set {
-			s.Elem().FieldByName(col).Set(columns[col])
+			field := s.Elem().FieldByName(col)
+			if !field.IsValid() {
+				return makeErr(nil, fmt.Sprintf("no %s field in colun set %d", col, n))
+			}
+			column := columns[col]
+			if column.IsValid() { // if len(rows) == 0, this would be a nil slice
+				field.Set(column)
+			}
 		}
 		bin, err := encode(s)
 		if err != nil {
