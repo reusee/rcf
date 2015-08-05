@@ -78,13 +78,9 @@ func TestBasics(t *testing.T) {
 	f.Sync()
 
 	n := 0
-	err = f.IterMetas(func(meta interface{}) bool {
-		if meta, ok := meta.(string); !ok {
-			t.Fatal("meta decode error")
-		} else {
-			if meta != metas[n] {
-				t.Fatal("meta no match")
-			}
+	err = f.IterMetas(func(meta string) bool {
+		if meta != metas[n] {
+			t.Fatal("meta no match")
 		}
 		n++
 		return true

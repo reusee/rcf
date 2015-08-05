@@ -203,13 +203,18 @@ func (f *File) Append(rows, meta interface{}) error {
 	return nil
 }
 
-func (f *File) IterMetas(fn func(meta interface{}) bool) error {
+func (f *File) IterMetas(fn interface{}) error {
 	f.Sync()
 	file, err := os.Open(f.path)
 	if err != nil {
 		return makeErr(err, "open file")
 	}
 	defer file.Close()
+	fnValue := reflect.ValueOf(fn)
+	fnType := fnValue.Type()
+	metaType := fnType.In(0)
+	decodeValue := reflect.ValueOf(decode)
+	meta := reflect.New(metaType)
 read:
 	// read number of sets
 	var numSets uint8
@@ -242,12 +247,14 @@ read:
 		return makeErr(err, "read meta")
 	}
 	// decode meta
-	var meta interface{}
-	err = decode(bs, &meta)
-	if err != nil {
-		return makeErr(err, "decode meta")
+	ret := decodeValue.Call([]reflect.Value{
+		reflect.ValueOf(bs),
+		meta,
+	})
+	if e := ret[0].Interface(); e != nil {
+		return makeErr(e.(error), "decode meta")
 	}
-	if !fn(meta) {
+	if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
 		return nil
 	}
 	// skip sets
