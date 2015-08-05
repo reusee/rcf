@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"runtime"
 	"sync"
 
 	"github.com/ugorji/go/codec"
@@ -287,74 +288,132 @@ func (f *File) IterRows(cols []string, cb interface{}) error {
 			}
 		}
 	}
-	// read number of sets
-read:
-	var numSets uint8
-	err = binary.Read(file, binary.LittleEndian, &numSets)
-	if err == io.EOF { // no more
-		return nil
+
+	done := make(chan struct{})
+	setErr := func(e error) {
+		err = e
 	}
-	if err != nil {
-		return makeErr(err, "read number of column sets")
-	}
-	// read meta length
-	var metaLength uint32
-	err = binary.Read(file, binary.LittleEndian, &metaLength)
-	if err != nil {
-		return makeErr(err, "read meta length")
-	}
-	// read sets length
-	var lens []uint32
-	var l uint32
-	for i, max := 0, int(numSets); i < max; i++ {
-		err = binary.Read(file, binary.LittleEndian, &l)
-		if err != nil {
-			return makeErr(err, "read column set length")
+
+	// read bytes
+	bins := make(chan [][]byte)
+	go func() {
+	loop:
+		for {
+			// read number of sets
+			var numSets uint8
+			err := binary.Read(file, binary.LittleEndian, &numSets)
+			if err == io.EOF { // no more
+				break loop
+			}
+			if err != nil {
+				setErr(makeErr(err, "read number of column sets"))
+				break loop
+			}
+			// read meta length
+			var metaLength uint32
+			err = binary.Read(file, binary.LittleEndian, &metaLength)
+			if err != nil {
+				setErr(makeErr(err, "read meta length"))
+				break loop
+			}
+			// read sets length
+			var lens []uint32
+			var l uint32
+			for i, max := 0, int(numSets); i < max; i++ {
+				err = binary.Read(file, binary.LittleEndian, &l)
+				if err != nil {
+					setErr(makeErr(err, "read column set length"))
+					break loop
+				}
+				lens = append(lens, l)
+			}
+			// skip meta
+			_, err = file.Seek(int64(metaLength), os.SEEK_CUR)
+			if err != nil {
+				setErr(makeErr(err, "skip meta"))
+				break loop
+			}
+			// read bytes
+			var bss [][]byte
+			for n, l := range lens {
+				if toDecode[n] { // decode
+					bs := make([]byte, l)
+					_, err = io.ReadFull(file, bs)
+					if err != nil {
+						setErr(makeErr(err, "read column set"))
+						break loop
+					}
+					bss = append(bss, bs)
+				} else { // skip
+					_, err = file.Seek(int64(l), os.SEEK_CUR)
+					if err != nil {
+						setErr(makeErr(err, "skip column set"))
+						break loop
+					}
+					bss = append(bss, nil)
+				}
+			}
+			select {
+			case bins <- bss:
+			case <-done:
+				break loop
+			}
 		}
-		lens = append(lens, l)
+		close(bins)
+	}()
+
+	argsChan := make(chan []reflect.Value)
+	ncpu := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	wg.Add(ncpu)
+	for i := 0; i < ncpu; i++ {
+		go func() {
+			defer wg.Done()
+		loop:
+			for bss := range bins {
+				columns := make(map[string]reflect.Value)
+				for n, bs := range bss {
+					if bs == nil {
+						continue
+					}
+					s := f.colSetsFn(n)
+					err := decode(bs, &s)
+					if err != nil {
+						setErr(makeErr(err, "decode column set"))
+						break loop
+					}
+					sValue := reflect.ValueOf(s).Elem()
+					sType := sValue.Type()
+					for i, max := 0, sValue.NumField(); i < max; i++ {
+						columns[sType.Field(i).Name] = sValue.Field(i)
+					}
+				}
+				for i, max := 0, columns[cols[0]].Len(); i < max; i++ {
+					var args []reflect.Value
+					for _, col := range cols {
+						args = append(args, columns[col].Index(i))
+					}
+					select {
+					case argsChan <- args:
+					case <-done:
+						break loop
+					}
+				}
+			}
+		}()
 	}
-	// skip meta
-	_, err = file.Seek(int64(metaLength), os.SEEK_CUR)
-	if err != nil {
-		return makeErr(err, "skip meta")
-	}
-	// decode sets
-	columns := make(map[string]reflect.Value)
-	for n, l := range lens {
-		if toDecode[n] { // decode
-			bs := make([]byte, l)
-			_, err = io.ReadFull(file, bs)
-			if err != nil {
-				return makeErr(err, "read column set")
-			}
-			s := f.colSetsFn(n)
-			err = decode(bs, &s)
-			if err != nil {
-				return makeErr(err, "decode column set")
-			}
-			sValue := reflect.ValueOf(s).Elem()
-			sType := sValue.Type()
-			for i, max := 0, sValue.NumField(); i < max; i++ {
-				columns[sType.Field(i).Name] = sValue.Field(i)
-			}
-		} else { // skip
-			_, err = file.Seek(int64(l), os.SEEK_CUR)
-			if err != nil {
-				return makeErr(err, "skip column set")
-			}
-		}
-	}
+	go func() {
+		wg.Wait()
+		close(argsChan)
+	}()
+
 	// call
-	for i, max := 0, columns[cols[0]].Len(); i < max; i++ {
-		var args []reflect.Value
-		for _, col := range cols {
-			args = append(args, columns[col].Index(i))
-		}
+	for args := range argsChan {
 		rets := cbValue.Call(args)
 		if !rets[0].Bool() {
-			return nil
+			return err
 		}
 	}
-	goto read
-	return nil
+
+	return err
 }
