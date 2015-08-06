@@ -46,7 +46,7 @@ func TestTaobaoData(t *testing.T) {
 
 	t0 := time.Now()
 	for i := 0; i < 1; i++ {
-		file.IterRows([]string{"Nid", "Category", "Title"}, func(nid int, cat int, title string) bool {
+		file.Iter([]string{"Nid", "Category", "Title"}, func(cols ...interface{}) bool {
 			return true
 		})
 	}
