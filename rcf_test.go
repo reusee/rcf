@@ -93,11 +93,11 @@ func TestBasics(t *testing.T) {
 	}
 
 	n = 0
-	err = f.IterRows([]string{"Foo"}, func(i int) bool {
+	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
 		n++
 		return true
 	})
-	if n != len(foos)*len(metas) {
+	if n != len(metas) {
 		t.Fatal("iterrows")
 	}
 
@@ -105,11 +105,11 @@ func TestBasics(t *testing.T) {
 
 	open() // reopen
 	n = 0
-	err = f.IterRows([]string{"Foo"}, func(i int) bool {
+	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
 		n++
 		return true
 	})
-	if n != len(foos)*len(metas) {
+	if n != len(metas) {
 		t.Fatal("iterrows")
 	}
 
@@ -120,11 +120,11 @@ func TestBasics(t *testing.T) {
 		}
 	}
 	n = 0
-	err = f.IterRows([]string{"Foo"}, func(i int) bool {
+	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
 		n++
 		return true
 	})
-	if n != len(foos)*len(metas)*2 {
+	if n != len(metas)*2 {
 		t.Fatal("iterrows")
 	}
 }

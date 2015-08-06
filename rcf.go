@@ -275,24 +275,36 @@ read:
 	return nil
 }
 
-func (f *File) IterRows(cols []string, cb interface{}) error {
+func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 	f.Sync()
 	file, err := os.Open(f.path)
 	if err != nil {
 		return makeErr(err, "open file")
 	}
 	defer file.Close()
-	cbValue := reflect.ValueOf(cb)
-	// determine which set to decode
-	toDecode := make([]bool, len(f.colSets))
-	for n, set := range f.colSets {
-	loop:
+	// determine which set to decode and which column to collect
+	toCollect := make([][]bool, 0)
+	for _, set := range f.colSets {
+		c := []bool{}
 		for _, col := range set {
-			for _, c := range cols {
-				if c == col {
-					toDecode[n] = true
-					break loop
+			in := false
+			for _, column := range cols {
+				if column == col {
+					in = true
+					break
 				}
+			}
+			c = append(c, in)
+		}
+		toCollect = append(toCollect, c)
+	}
+	toDecode := make([]bool, len(toCollect))
+	for n, c := range toCollect {
+	loop:
+		for _, b := range c {
+			if b {
+				toDecode[n] = true
+				break loop
 			}
 		}
 	}
@@ -370,7 +382,7 @@ func (f *File) IterRows(cols []string, cb interface{}) error {
 		close(bins)
 	}()
 
-	argsChan := make(chan []reflect.Value)
+	columnsChan := make(chan []interface{})
 	ncpu := runtime.NumCPU()
 	wg := new(sync.WaitGroup)
 	wg.Add(ncpu)
@@ -379,7 +391,7 @@ func (f *File) IterRows(cols []string, cb interface{}) error {
 			defer wg.Done()
 		loop:
 			for bss := range bins {
-				columns := make(map[string]reflect.Value)
+				var columns []interface{}
 				for n, bs := range bss {
 					if bs == nil {
 						continue
@@ -391,34 +403,29 @@ func (f *File) IterRows(cols []string, cb interface{}) error {
 						break loop
 					}
 					sValue := reflect.ValueOf(s).Elem()
-					sType := sValue.Type()
-					for i, max := 0, sValue.NumField(); i < max; i++ {
-						columns[sType.Field(i).Name] = sValue.Field(i)
+					for nfield, b := range toCollect[n] {
+						if b {
+							columns = append(columns, sValue.Field(nfield).Interface())
+						}
 					}
 				}
-				for i, max := 0, columns[cols[0]].Len(); i < max; i++ {
-					var args []reflect.Value
-					for _, col := range cols {
-						args = append(args, columns[col].Index(i))
-					}
-					select {
-					case argsChan <- args:
-					case <-done:
-						break loop
-					}
+				select {
+				case columnsChan <- columns:
+				case <-done:
+					break loop
 				}
 			}
 		}()
 	}
 	go func() {
 		wg.Wait()
-		close(argsChan)
+		close(columnsChan)
 	}()
 
 	// call
-	for args := range argsChan {
-		rets := cbValue.Call(args)
-		if !rets[0].Bool() {
+	for columns := range columnsChan {
+		if !cb(columns) {
+			close(done)
 			return err
 		}
 	}
