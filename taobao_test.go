@@ -8,6 +8,7 @@ import (
 )
 
 func TestTaobaoData(t *testing.T) {
+	t.Skip()
 	file, err := New("data.rcf",
 		func(i int) interface{} {
 			switch i {

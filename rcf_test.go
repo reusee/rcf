@@ -94,6 +94,10 @@ func TestBasics(t *testing.T) {
 
 	n = 0
 	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+		foos := cols[0].([]int)
+		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+			t.Fatal("foo value not match")
+		}
 		n++
 		return true
 	})
@@ -106,6 +110,10 @@ func TestBasics(t *testing.T) {
 	open() // reopen
 	n = 0
 	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+		foos := cols[0].([]int)
+		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+			t.Fatal("foo value not match")
+		}
 		n++
 		return true
 	})
@@ -121,6 +129,10 @@ func TestBasics(t *testing.T) {
 	}
 	n = 0
 	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+		foos := cols[0].([]int)
+		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+			t.Fatal("foo value not match")
+		}
 		n++
 		return true
 	})
