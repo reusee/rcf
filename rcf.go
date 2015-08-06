@@ -424,7 +424,7 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 
 	// call
 	for columns := range columnsChan {
-		if !cb(columns) {
+		if !cb(columns...) {
 			close(done)
 			return err
 		}
