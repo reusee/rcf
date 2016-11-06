@@ -59,8 +59,8 @@ func TestBasics(t *testing.T) {
 
 	foos := []Foo{
 		{1, "A", true, []int{1, 2, 3}, map[string]string{"A": "a"}},
-		{2, "B", true, []int{2, 3, 4}, map[string]string{"B": "b"}},
-		{3, "C", true, []int{3, 4, 5}, map[string]string{"C": "c"}},
+		{2, "B", false, []int{2, 3, 4}, map[string]string{"B": "b"}},
+		{3, "C", false, []int{3, 4, 5}, map[string]string{"C": "c"}},
 		{4, "D", true, []int{4, 5, 6}, map[string]string{"D": "d"}},
 	}
 	metas := []string{
@@ -99,7 +99,7 @@ func TestBasics(t *testing.T) {
 
 	t.Run("iter rows", func(t *testing.T) {
 		n := 0
-		err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+		err = f.Iter([]string{"Foo", "Baz"}, func(cols ...interface{}) bool {
 			foos := cols[0].([]int)
 			if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
 				t.Fatal("foo value not match")

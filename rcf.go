@@ -3,7 +3,7 @@ package rcf
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"github.com/golang/snappy"
 	"io"
@@ -44,7 +44,7 @@ func New(path string, colSetsFn func(int) interface{}) (*File, error) {
 		if v == nil {
 			break
 		}
-		gob.Register(v)
+		//gob.Register(v)
 		t := reflect.TypeOf(v).Elem()
 		set := []string{}
 		for i, max := 0, t.NumField(); i < max; i++ {
@@ -106,7 +106,7 @@ func (f *File) validate() (err error) {
 func encode(o interface{}) (bs []byte, err error) {
 	buf := new(bytes.Buffer)
 	w := snappy.NewWriter(buf)
-	err = gob.NewEncoder(w).Encode(o)
+	err = json.NewEncoder(w).Encode(o)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func encode(o interface{}) (bs []byte, err error) {
 
 func decode(bs []byte, target interface{}) (err error) {
 	r := snappy.NewReader(bytes.NewReader(bs))
-	return gob.NewDecoder(r).Decode(target)
+	return json.NewDecoder(r).Decode(target)
 }
 
 func (f *File) Append(rows, meta interface{}) error {
@@ -284,6 +284,7 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 		return makeErr(err, "open file")
 	}
 	defer file.Close()
+
 	// determine which set to decode and which column to collect
 	toCollect := make([][]bool, 0)
 	for _, set := range f.colSets {
