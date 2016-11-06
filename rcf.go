@@ -2,16 +2,15 @@ package rcf
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"github.com/golang/snappy"
 	"io"
 	"os"
 	"reflect"
 	"runtime"
 	"sync"
-
-	"github.com/ugorji/go/codec"
 )
 
 type File struct {
@@ -22,8 +21,6 @@ type File struct {
 	colSetsFn    func(int) interface{}
 	validateOnce sync.Once
 }
-
-var codecHandle = new(codec.CborHandle)
 
 func (f *File) Sync() error {
 	f.Lock()
@@ -107,8 +104,8 @@ func (f *File) validate() (err error) {
 
 func encode(o interface{}) (bs []byte, err error) {
 	buf := new(bytes.Buffer)
-	w := gzip.NewWriter(buf)
-	err = codec.NewEncoder(w, codecHandle).Encode(o)
+	w := snappy.NewWriter(buf)
+	err = json.NewEncoder(w).Encode(o)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +117,8 @@ func encode(o interface{}) (bs []byte, err error) {
 }
 
 func decode(bs []byte, target interface{}) (err error) {
-	r, err := gzip.NewReader(bytes.NewReader(bs))
-	if err != nil {
-		return err
-	}
-	return codec.NewDecoder(r, codecHandle).Decode(target)
+	r := snappy.NewReader(bytes.NewReader(bs))
+	return json.NewDecoder(r).Decode(target)
 }
 
 func (f *File) Append(rows, meta interface{}) error {
@@ -162,8 +156,11 @@ func (f *File) Append(rows, meta interface{}) error {
 	var bins [][]byte
 	for n, set := range f.colSets {
 		s := reflect.ValueOf(f.colSetsFn(n))
+		if s.Kind() == reflect.Ptr {
+			s = s.Elem()
+		}
 		for _, col := range set {
-			field := s.Elem().FieldByName(col)
+			field := s.FieldByName(col)
 			if !field.IsValid() {
 				return makeErr(nil, fmt.Sprintf("no %s field in colun set %d", col, n))
 			}
@@ -172,7 +169,7 @@ func (f *File) Append(rows, meta interface{}) error {
 				field.Set(column)
 			}
 		}
-		bin, err := encode(s)
+		bin, err := encode(s.Interface())
 		if err != nil {
 			return makeErr(err, "encode column set")
 		}

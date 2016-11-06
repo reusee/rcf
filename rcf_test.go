@@ -68,75 +68,85 @@ func TestBasics(t *testing.T) {
 		"second",
 		"third",
 	}
-	for _, meta := range metas {
-		err = f.Append(foos, meta)
-		if err != nil {
-			t.Fatalf("append: %v", err)
+
+	t.Run("append", func(t *testing.T) {
+		for _, meta := range metas {
+			err = f.Append(foos, meta)
+			if err != nil {
+				t.Fatalf("append: %v", err)
+			}
 		}
-	}
+	})
 
 	f.Sync()
 
-	n := 0
-	err = f.IterMetas(func(meta string) bool {
-		if meta != metas[n] {
-			t.Fatal("meta no match")
-		}
-		n++
-		return true
-	})
-	if err != nil {
-		t.Fatalf("itermeta: %v", err)
-	}
-	if n != len(metas) {
-		t.Fatalf("itermeta")
-	}
-
-	n = 0
-	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
-		foos := cols[0].([]int)
-		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
-			t.Fatal("foo value not match")
-		}
-		n++
-		return true
-	})
-	if n != len(metas) {
-		t.Fatal("iterrows")
-	}
-
-	f.Close()
-
-	open() // reopen
-	n = 0
-	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
-		foos := cols[0].([]int)
-		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
-			t.Fatal("foo value not match")
-		}
-		n++
-		return true
-	})
-	if n != len(metas) {
-		t.Fatal("iterrows")
-	}
-
-	for _, meta := range metas {
-		err = f.Append(foos, meta)
+	t.Run("iter metas", func(t *testing.T) {
+		n := 0
+		err = f.IterMetas(func(meta string) bool {
+			if meta != metas[n] {
+				t.Fatal("meta no match")
+			}
+			n++
+			return true
+		})
 		if err != nil {
-			t.Fatalf("append: %v", err)
+			t.Fatalf("itermeta: %v", err)
 		}
-	}
-	n = 0
-	err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
-		foos := cols[0].([]int)
-		if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
-			t.Fatal("foo value not match")
+		if n != len(metas) {
+			t.Fatalf("itermeta")
 		}
-		n++
-		return true
 	})
-	if n != len(metas)*2 {
-		t.Fatal("iterrows")
-	}
+
+	t.Run("iter rows", func(t *testing.T) {
+		n := 0
+		err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+			foos := cols[0].([]int)
+			if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+				t.Fatal("foo value not match")
+			}
+			n++
+			return true
+		})
+		if n != len(metas) {
+			t.Fatal("iterrows")
+		}
+	})
+
+	t.Run("reopen", func(t *testing.T) {
+		f.Close()
+		open() // reopen
+		n := 0
+		err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+			foos := cols[0].([]int)
+			if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+				t.Fatal("foo value not match")
+			}
+			n++
+			return true
+		})
+		if n != len(metas) {
+			t.Fatal("iterrows")
+		}
+	})
+
+	t.Run("append then iter", func(t *testing.T) {
+		for _, meta := range metas {
+			err = f.Append(foos, meta)
+			if err != nil {
+				t.Fatalf("append: %v", err)
+			}
+		}
+		n := 0
+		err = f.Iter([]string{"Foo"}, func(cols ...interface{}) bool {
+			foos := cols[0].([]int)
+			if foos[0] != 1 || foos[1] != 2 || foos[2] != 3 || foos[3] != 4 {
+				t.Fatal("foo value not match")
+			}
+			n++
+			return true
+		})
+		if n != len(metas)*2 {
+			t.Fatal("iterrows")
+		}
+	})
 }
