@@ -225,6 +225,11 @@ func (f *File) IterMetas(fn interface{}) error {
 
 	wg := new(sync.WaitGroup)
 	fns := make(chan func(), 2048)
+	fns2 := make(chan func(), 2048)
+	shut := func() {
+		close(fns)
+		close(fns2)
+	}
 
 	go func() {
 		for {
@@ -237,7 +242,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			}
 			if err != nil {
 				err = makeErr(err, "read number of column sets")
-				close(fns)
+				shut()
 				return
 			}
 			// read meta length
@@ -245,7 +250,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			err = binary.Read(file, binary.LittleEndian, &metaLength)
 			if err != nil {
 				err = makeErr(err, "read meta length")
-				close(fns)
+				shut()
 				return
 			}
 			// read sets length
@@ -254,7 +259,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				err = binary.Read(file, binary.LittleEndian, &l)
 				if err != nil {
 					err = makeErr(err, "read column set length")
-					close(fns)
+					shut()
 					return
 				}
 				sum += l
@@ -264,7 +269,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			_, err = io.ReadFull(file, bs)
 			if err != nil {
 				err = makeErr(err, "read meta")
-				close(fns)
+				shut()
 				return
 			}
 			wg.Add(1)
@@ -273,28 +278,41 @@ func (f *File) IterMetas(fn interface{}) error {
 				err = decode(bs, meta.Interface())
 				if err != nil {
 					err = makeErr(err, "decode meta")
-					close(fns)
+					shut()
 					return
 				}
-				if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
-					close(fns)
-					return
+				fns2 <- func() {
+					if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
+						shut()
+						return
+					}
+					wg.Done()
 				}
-				wg.Done()
 			}
 			// skip sets
 			_, err = file.Seek(int64(sum), os.SEEK_CUR)
 			if err != nil {
 				err = makeErr(err, "skip column sets")
-				close(fns)
+				shut()
 				return
 			}
 		}
 		wg.Wait()
-		close(fns)
+		shut()
 	}()
 
-	for fn := range fns {
+	go func() {
+		ncpu := runtime.NumCPU()
+		for i := 0; i < ncpu; i++ {
+			go func() {
+				for fn := range fns {
+					fn()
+				}
+			}()
+		}
+	}()
+
+	for fn := range fns2 {
 		fn()
 	}
 
