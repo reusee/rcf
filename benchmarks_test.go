@@ -51,7 +51,7 @@ func BenchmarkAppend(b *testing.B) {
 			{1, 2, 3},
 			{1, 2, 3},
 			{1, 2, 3},
-		}, nil)
+		}, true)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -100,7 +100,7 @@ func BenchmarkIter(b *testing.B) {
 			{1, 2, 3},
 			{1, 2, 3},
 			{1, 2, 3},
-		}, nil)
+		}, true)
 		if err != nil {
 			b.Fatal(err)
 		}

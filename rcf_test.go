@@ -107,8 +107,11 @@ func TestBasics(t *testing.T) {
 			n++
 			return true
 		})
+		if err != nil {
+			t.Fatalf("iter: %v", err)
+		}
 		if n != len(metas) {
-			t.Fatal("iterrows")
+			t.Fatalf("iterrows")
 		}
 	})
 
@@ -124,6 +127,9 @@ func TestBasics(t *testing.T) {
 			n++
 			return true
 		})
+		if err != nil {
+			t.Fatalf("iter: %v", err)
+		}
 		if n != len(metas) {
 			t.Fatal("iterrows")
 		}
@@ -145,6 +151,9 @@ func TestBasics(t *testing.T) {
 			n++
 			return true
 		})
+		if err != nil {
+			t.Fatalf("iter: %v", err)
+		}
 		if n != len(metas)*2 {
 			t.Fatal("iterrows")
 		}
