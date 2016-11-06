@@ -231,6 +231,13 @@ func (f *File) IterMetas(fn interface{}) error {
 		close(fns)
 		close(fns2)
 	}
+	var e error
+	setErrOnce := new(sync.Once)
+	setErr := func(err error) {
+		setErrOnce.Do(func() {
+			e = err
+		})
+	}
 
 	go func() {
 		for {
@@ -243,7 +250,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				break
 			}
 			if err != nil {
-				err = makeErr(err, "read number of column sets")
+				setErr(makeErr(err, "read number of column sets"))
 				shut()
 				return
 			}
@@ -252,7 +259,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			var metaLength uint32
 			err = binary.Read(file, binary.LittleEndian, &metaLength)
 			if err != nil {
-				err = makeErr(err, "read meta length")
+				setErr(makeErr(err, "read meta length"))
 				shut()
 				return
 			}
@@ -262,7 +269,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			for i, max := 0, int(numSets); i < max; i++ {
 				err = binary.Read(file, binary.LittleEndian, &l)
 				if err != nil {
-					err = makeErr(err, "read column set length")
+					setErr(makeErr(err, "read column set length"))
 					shut()
 					return
 				}
@@ -273,7 +280,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			bs := make([]byte, metaLength)
 			_, err = io.ReadFull(file, bs)
 			if err != nil {
-				err = makeErr(err, "read meta")
+				setErr(makeErr(err, "read meta"))
 				shut()
 				return
 			}
@@ -283,7 +290,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				// decode meta
 				err = decode(bs, meta.Interface())
 				if err != nil {
-					err = makeErr(err, "decode meta")
+					setErr(makeErr(err, "decode meta"))
 					shut()
 					return
 				}
@@ -300,7 +307,7 @@ func (f *File) IterMetas(fn interface{}) error {
 			// skip sets
 			_, err = file.Seek(int64(sum), os.SEEK_CUR)
 			if err != nil {
-				err = makeErr(err, "skip column sets")
+				setErr(makeErr(err, "skip column sets"))
 				shut()
 				return
 			}
@@ -325,7 +332,7 @@ func (f *File) IterMetas(fn interface{}) error {
 		fn()
 	}
 
-	return err
+	return e
 }
 
 func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
