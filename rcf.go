@@ -222,53 +222,83 @@ func (f *File) IterMetas(fn interface{}) error {
 	fnValue := reflect.ValueOf(fn)
 	fnType := fnValue.Type()
 	metaType := fnType.In(0)
-read:
-	meta := reflect.New(metaType)
-	// read number of sets
-	var numSets uint8
-	err = binary.Read(file, binary.LittleEndian, &numSets)
-	if err == io.EOF { // no more
-		return nil
-	}
-	if err != nil {
-		return makeErr(err, "read number of column sets")
-	}
-	// read meta length
-	var metaLength uint32
-	err = binary.Read(file, binary.LittleEndian, &metaLength)
-	if err != nil {
-		return makeErr(err, "read meta length")
-	}
-	// read sets length
-	var sum, l uint32
-	for i, max := 0, int(numSets); i < max; i++ {
-		err = binary.Read(file, binary.LittleEndian, &l)
-		if err != nil {
-			return makeErr(err, "read column set length")
+
+	wg := new(sync.WaitGroup)
+	fns := make(chan func(), 2048)
+
+	go func() {
+		for {
+			meta := reflect.New(metaType)
+			// read number of sets
+			var numSets uint8
+			err = binary.Read(file, binary.LittleEndian, &numSets)
+			if err == io.EOF { // no more
+				break
+			}
+			if err != nil {
+				err = makeErr(err, "read number of column sets")
+				close(fns)
+				return
+			}
+			// read meta length
+			var metaLength uint32
+			err = binary.Read(file, binary.LittleEndian, &metaLength)
+			if err != nil {
+				err = makeErr(err, "read meta length")
+				close(fns)
+				return
+			}
+			// read sets length
+			var sum, l uint32
+			for i, max := 0, int(numSets); i < max; i++ {
+				err = binary.Read(file, binary.LittleEndian, &l)
+				if err != nil {
+					err = makeErr(err, "read column set length")
+					close(fns)
+					return
+				}
+				sum += l
+			}
+			// read meta
+			bs := make([]byte, metaLength)
+			_, err = io.ReadFull(file, bs)
+			if err != nil {
+				err = makeErr(err, "read meta")
+				close(fns)
+				return
+			}
+			wg.Add(1)
+			fns <- func() {
+				// decode meta
+				err = decode(bs, meta.Interface())
+				if err != nil {
+					err = makeErr(err, "decode meta")
+					close(fns)
+					return
+				}
+				if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
+					close(fns)
+					return
+				}
+				wg.Done()
+			}
+			// skip sets
+			_, err = file.Seek(int64(sum), os.SEEK_CUR)
+			if err != nil {
+				err = makeErr(err, "skip column sets")
+				close(fns)
+				return
+			}
 		}
-		sum += l
+		wg.Wait()
+		close(fns)
+	}()
+
+	for fn := range fns {
+		fn()
 	}
-	// read meta
-	bs := make([]byte, metaLength)
-	_, err = io.ReadFull(file, bs)
-	if err != nil {
-		return makeErr(err, "read meta")
-	}
-	// decode meta
-	err = decode(bs, meta.Interface())
-	if err != nil {
-		return makeErr(err, "decode meta")
-	}
-	if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
-		return nil
-	}
-	// skip sets
-	_, err = file.Seek(int64(sum), os.SEEK_CUR)
-	if err != nil {
-		return makeErr(err, "skip column sets")
-	}
-	goto read
-	return nil
+
+	return err
 }
 
 func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
