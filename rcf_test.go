@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -157,5 +158,60 @@ func TestBasics(t *testing.T) {
 		if n != len(metas)*2 {
 			t.Fatal("iterrows")
 		}
+	})
+}
+
+func TestMeta(t *testing.T) {
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("rcf-test-%d", rand.Int63()))
+	var f *File
+	var err error
+
+	f, err = New(path, func(i int) (ret interface{}) {
+		switch i {
+		case 0:
+			ret = &struct {
+				Foo []int
+			}{}
+		}
+		return
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer f.Close()
+
+	type Meta struct {
+		CategoryID int64
+		Sort       string
+		Start      int
+
+		UpdateAt time.Time
+		Sales    int64
+		Skip     bool
+	}
+
+	f.Append([]struct{}{}, Meta{
+		Start: 0,
+		Skip:  true,
+	})
+	f.Append([]struct{}{}, Meta{
+		Start: 1,
+		Skip:  false,
+	})
+	f.Sync()
+
+	i := 0
+	f.IterMetas(func(meta Meta) bool {
+		if i == 0 {
+			if meta.Skip != true {
+				t.Fatal("wrong value")
+			}
+		} else if i == 1 {
+			if meta.Skip != false {
+				t.Fatal("wrong value")
+			}
+		}
+		i++
+		return true
 	})
 }

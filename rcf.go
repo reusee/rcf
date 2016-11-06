@@ -3,7 +3,7 @@ package rcf
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/gob"
 	"fmt"
 	"github.com/golang/snappy"
 	"io"
@@ -44,7 +44,7 @@ func New(path string, colSetsFn func(int) interface{}) (*File, error) {
 		if v == nil {
 			break
 		}
-		//gob.Register(v)
+		gob.Register(v)
 		t := reflect.TypeOf(v).Elem()
 		set := []string{}
 		for i, max := 0, t.NumField(); i < max; i++ {
@@ -106,7 +106,7 @@ func (f *File) validate() (err error) {
 func encode(o interface{}) (bs []byte, err error) {
 	buf := new(bytes.Buffer)
 	w := snappy.NewWriter(buf)
-	err = json.NewEncoder(w).Encode(o)
+	err = gob.NewEncoder(w).Encode(o)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func encode(o interface{}) (bs []byte, err error) {
 
 func decode(bs []byte, target interface{}) (err error) {
 	r := snappy.NewReader(bytes.NewReader(bs))
-	return json.NewDecoder(r).Decode(target)
+	return gob.NewDecoder(r).Decode(target)
 }
 
 func (f *File) Append(rows, meta interface{}) error {
@@ -176,10 +176,8 @@ func (f *File) Append(rows, meta interface{}) error {
 		if err != nil {
 			return makeErr(err, "encode column set")
 		}
-		//pt("%d_%v ", len(bin), time.Now().Sub(t0))
 		bins = append(bins, bin)
 	}
-	//pt("\n")
 	// write header
 	if len(bins) > 255 {
 		return makeErr(nil, "more than 255 column sets")
@@ -224,9 +222,8 @@ func (f *File) IterMetas(fn interface{}) error {
 	fnValue := reflect.ValueOf(fn)
 	fnType := fnValue.Type()
 	metaType := fnType.In(0)
-	decodeValue := reflect.ValueOf(decode)
-	meta := reflect.New(metaType)
 read:
+	meta := reflect.New(metaType)
 	// read number of sets
 	var numSets uint8
 	err = binary.Read(file, binary.LittleEndian, &numSets)
@@ -258,12 +255,9 @@ read:
 		return makeErr(err, "read meta")
 	}
 	// decode meta
-	ret := decodeValue.Call([]reflect.Value{
-		reflect.ValueOf(bs),
-		meta,
-	})
-	if e := ret[0].Interface(); e != nil {
-		return makeErr(e.(error), "decode meta")
+	err = decode(bs, meta.Interface())
+	if err != nil {
+		return makeErr(err, "decode meta")
 	}
 	if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
 		return nil
