@@ -219,6 +219,7 @@ func (f *File) IterMetas(fn interface{}) error {
 		return makeErr(err, "open file")
 	}
 	defer file.Close()
+
 	fnValue := reflect.ValueOf(fn)
 	fnType := fnValue.Type()
 	metaType := fnType.In(0)
@@ -234,6 +235,7 @@ func (f *File) IterMetas(fn interface{}) error {
 	go func() {
 		for {
 			meta := reflect.New(metaType)
+
 			// read number of sets
 			var numSets uint8
 			err = binary.Read(file, binary.LittleEndian, &numSets)
@@ -245,6 +247,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				shut()
 				return
 			}
+
 			// read meta length
 			var metaLength uint32
 			err = binary.Read(file, binary.LittleEndian, &metaLength)
@@ -253,6 +256,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				shut()
 				return
 			}
+
 			// read sets length
 			var sum, l uint32
 			for i, max := 0, int(numSets); i < max; i++ {
@@ -264,6 +268,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				}
 				sum += l
 			}
+
 			// read meta
 			bs := make([]byte, metaLength)
 			_, err = io.ReadFull(file, bs)
@@ -273,6 +278,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				return
 			}
 			wg.Add(1)
+
 			fns <- func() {
 				// decode meta
 				err = decode(bs, meta.Interface())
@@ -281,6 +287,7 @@ func (f *File) IterMetas(fn interface{}) error {
 					shut()
 					return
 				}
+				// callback
 				fns2 <- func() {
 					if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
 						shut()
@@ -289,6 +296,7 @@ func (f *File) IterMetas(fn interface{}) error {
 					wg.Done()
 				}
 			}
+
 			// skip sets
 			_, err = file.Seek(int64(sum), os.SEEK_CUR)
 			if err != nil {
@@ -296,6 +304,7 @@ func (f *File) IterMetas(fn interface{}) error {
 				shut()
 				return
 			}
+
 		}
 		wg.Wait()
 		shut()
