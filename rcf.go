@@ -227,10 +227,14 @@ func (f *File) IterMetas(fn interface{}) error {
 	wg := new(sync.WaitGroup)
 	fns := make(chan func(), 2048)
 	fns2 := make(chan func(), 2048)
+	done := make(chan struct{})
+	closeDoneOnce := new(sync.Once)
 	shut := func() {
-		close(fns)
-		close(fns2)
+		closeDoneOnce.Do(func() {
+			close(done)
+		})
 	}
+
 	var e error
 	setErrOnce := new(sync.Once)
 	setErr := func(err error) {
@@ -286,7 +290,8 @@ func (f *File) IterMetas(fn interface{}) error {
 			}
 			wg.Add(1)
 
-			fns <- func() {
+			select {
+			case fns <- func() {
 				// decode meta
 				err = decode(bs, meta.Interface())
 				if err != nil {
@@ -295,13 +300,20 @@ func (f *File) IterMetas(fn interface{}) error {
 					return
 				}
 				// callback
-				fns2 <- func() {
+				select {
+				case fns2 <- func() {
 					if !fnValue.Call([]reflect.Value{meta.Elem()})[0].Bool() {
 						shut()
 						return
 					}
 					wg.Done()
+				}:
+				case <-done:
+					return
 				}
+			}:
+			case <-done:
+				return
 			}
 
 			// skip sets
@@ -321,15 +333,26 @@ func (f *File) IterMetas(fn interface{}) error {
 		ncpu := runtime.NumCPU()
 		for i := 0; i < ncpu; i++ {
 			go func() {
-				for fn := range fns {
-					fn()
+				for {
+					select {
+					case fn := <-fns:
+						fn()
+					case <-done:
+						return
+					}
 				}
 			}()
 		}
 	}()
 
-	for fn := range fns2 {
-		fn()
+loop:
+	for {
+		select {
+		case fn := <-fns2:
+			fn()
+		case <-done:
+			break loop
+		}
 	}
 
 	return e
@@ -361,41 +384,54 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 	}
 	toDecode := make([]bool, len(toCollect))
 	for n, c := range toCollect {
-	loop:
 		for _, b := range c {
 			if b {
 				toDecode[n] = true
-				break loop
+				break
 			}
 		}
 	}
 
+	var e error
+	setErrOnce := new(sync.Once)
+	setErr := func(err error) {
+		setErrOnce.Do(func() {
+			e = err
+		})
+	}
+
+	wg := new(sync.WaitGroup)
+	fns := make(chan func(), 2048)
+	fns2 := make(chan func(), 2048)
 	done := make(chan struct{})
-	setErr := func(e error) {
-		err = e
+	closeDoneOnce := new(sync.Once)
+	shutdown := func() {
+		closeDoneOnce.Do(func() {
+			close(done)
+		})
 	}
 
 	// read bytes
-	bins := make(chan [][]byte)
 	go func() {
-	loop:
 		for {
 			// read number of sets
 			var numSets uint8
 			err := binary.Read(file, binary.LittleEndian, &numSets)
 			if err == io.EOF { // no more
-				break loop
+				break
 			}
 			if err != nil {
 				setErr(makeErr(err, "read number of column sets"))
-				break loop
+				shutdown()
+				return
 			}
 			// read meta length
 			var metaLength uint32
 			err = binary.Read(file, binary.LittleEndian, &metaLength)
 			if err != nil {
 				setErr(makeErr(err, "read meta length"))
-				break loop
+				shutdown()
+				return
 			}
 			// read sets length
 			var lens []uint32
@@ -404,7 +440,8 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 				err = binary.Read(file, binary.LittleEndian, &l)
 				if err != nil {
 					setErr(makeErr(err, "read column set length"))
-					break loop
+					shutdown()
+					return
 				}
 				lens = append(lens, l)
 			}
@@ -412,7 +449,8 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 			_, err = file.Seek(int64(metaLength), os.SEEK_CUR)
 			if err != nil {
 				setErr(makeErr(err, "skip meta"))
-				break loop
+				shutdown()
+				return
 			}
 			// read bytes
 			var bss [][]byte
@@ -422,36 +460,24 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 					_, err = io.ReadFull(file, bs)
 					if err != nil {
 						setErr(makeErr(err, "read column set"))
-						break loop
+						shutdown()
+						return
 					}
 					bss = append(bss, bs)
 				} else { // skip
 					_, err = file.Seek(int64(l), os.SEEK_CUR)
 					if err != nil {
 						setErr(makeErr(err, "skip column set"))
-						break loop
+						shutdown()
+						return
 					}
 					bss = append(bss, nil)
 				}
 			}
-			select {
-			case bins <- bss:
-			case <-done:
-				break loop
-			}
-		}
-		close(bins)
-	}()
 
-	columnsChan := make(chan []interface{})
-	ncpu := runtime.NumCPU()
-	wg := new(sync.WaitGroup)
-	wg.Add(ncpu)
-	for i := 0; i < ncpu; i++ {
-		go func() {
-			defer wg.Done()
-		loop:
-			for bss := range bins {
+			wg.Add(1)
+			select {
+			case fns <- func() {
 				var columns []interface{}
 				for n, bs := range bss {
 					if bs == nil {
@@ -461,7 +487,8 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 					err := decode(bs, &s)
 					if err != nil {
 						setErr(makeErr(err, "decode column set"))
-						break loop
+						shutdown()
+						return
 					}
 					sValue := reflect.ValueOf(s).Elem()
 					for nfield, b := range toCollect[n] {
@@ -470,26 +497,54 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 						}
 					}
 				}
+
 				select {
-				case columnsChan <- columns:
+				case fns2 <- func() {
+					if !cb(columns...) {
+						shutdown()
+						return
+					}
+					wg.Done()
+				}:
 				case <-done:
-					break loop
+					return
 				}
+
+			}:
+			case <-done:
+				return
 			}
-		}()
-	}
-	go func() {
+
+		}
 		wg.Wait()
-		close(columnsChan)
+		shutdown()
 	}()
 
-	// call
-	for columns := range columnsChan {
-		if !cb(columns...) {
-			close(done)
-			return err
+	go func() {
+		ncpu := runtime.NumCPU()
+		for i := 0; i < ncpu; i++ {
+			go func() {
+				for {
+					select {
+					case fn := <-fns:
+						fn()
+					case <-done:
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+loop:
+	for {
+		select {
+		case fn := <-fns2:
+			fn()
+		case <-done:
+			break loop
 		}
 	}
 
-	return err
+	return e
 }
