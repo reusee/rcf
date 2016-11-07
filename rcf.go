@@ -226,7 +226,7 @@ func (f *File) IterMetas(fn interface{}) error {
 	metaType := fnType.In(0)
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(2048)
+	p1 := line.NewPipe(200000)
 	p2 := line.NewPipe(2048)
 
 	go func() {
@@ -346,7 +346,7 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 	}
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(2048)
+	p1 := line.NewPipe(200000)
 	p2 := line.NewPipe(2048)
 
 	// read bytes
@@ -477,7 +477,7 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 	}
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(2048)
+	p1 := line.NewPipe(200000)
 	p2 := line.NewPipe(2048)
 
 	columnsTargetValue := reflect.ValueOf(columnsTarget).Elem()
@@ -588,6 +588,7 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 						line.Close()
 						return
 					}
+					//pt("%d %d\n", p1.Len(), p2.Len())
 					line.Done()
 				}) {
 					return
