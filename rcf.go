@@ -452,3 +452,158 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 
 	return line.Err
 }
+
+func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb func() bool) error {
+	f.Sync()
+	file, err := os.Open(f.path)
+	if err != nil {
+		return makeErr(err, "open file")
+	}
+	defer file.Close()
+
+	columnsToCollect := make(map[string]bool)
+	t := reflect.TypeOf(columnsTarget).Elem()
+	for i, l := 0, t.NumField(); i < l; i++ {
+		columnsToCollect[t.Field(i).Name] = true
+	}
+
+	toDecode := make([]bool, len(f.colSets))
+	for i, set := range f.colSets {
+		for _, col := range set {
+			if columnsToCollect[col] {
+				toDecode[i] = true
+			}
+		}
+	}
+
+	line := pipeline.NewPipeline()
+	p1 := line.NewPipe(2048)
+	p2 := line.NewPipe(2048)
+
+	columnsTargetValue := reflect.ValueOf(columnsTarget).Elem()
+
+	go func() {
+		for {
+
+			// read number of sets
+			var numSets uint8
+			err := binary.Read(file, binary.LittleEndian, &numSets)
+			if err == io.EOF { // no more
+				break
+			}
+			if err != nil {
+				line.Error(makeErr(err, "read number of column sets"))
+				return
+			}
+
+			// read meta length
+			var metaLength uint32
+			err = binary.Read(file, binary.LittleEndian, &metaLength)
+			if err != nil {
+				line.Error(makeErr(err, "read meta length"))
+				return
+			}
+
+			// read sets length
+			var lens []uint32
+			var l uint32
+			for i, max := 0, int(numSets); i < max; i++ {
+				err = binary.Read(file, binary.LittleEndian, &l)
+				if err != nil {
+					line.Error(makeErr(err, "read column set length"))
+					return
+				}
+				lens = append(lens, l)
+			}
+
+			// read meta
+			metaBytes := make([]byte, metaLength)
+			_, err = io.ReadFull(file, metaBytes)
+			if err != nil {
+				line.Error(makeErr(err, "read meta"))
+				return
+			}
+
+			// read bytes
+			var columnBytesSlice [][]byte
+			for n, l := range lens {
+				if toDecode[n] { // decode
+					bs := make([]byte, l)
+					_, err = io.ReadFull(file, bs)
+					if err != nil {
+						line.Error(makeErr(err, "read column set"))
+						return
+					}
+					columnBytesSlice = append(columnBytesSlice, bs)
+				} else { // skip
+					_, err = file.Seek(int64(l), os.SEEK_CUR)
+					if err != nil {
+						line.Error(makeErr(err, "skip column set"))
+						return
+					}
+					columnBytesSlice = append(columnBytesSlice, nil)
+				}
+			}
+
+			line.Add()
+			if !p1.Do(func() {
+				// decode meta
+				meta := reflect.New(reflect.TypeOf(metaTarget).Elem())
+				err = decode(metaBytes, meta.Interface())
+				if err != nil {
+					line.Error(makeErr(err, "decode meta"))
+					return
+				}
+
+				// decode columns
+				toSet := make(map[string]reflect.Value)
+				for n, bs := range columnBytesSlice {
+					if bs == nil {
+						continue
+					}
+					columnSet := f.colSetsFn(n)
+					err := decode(bs, &columnSet)
+					if err != nil {
+						line.Error(makeErr(err, "decode column set"))
+						return
+					}
+					columnSetType := reflect.TypeOf(columnSet).Elem()
+					columnSetValue := reflect.ValueOf(columnSet).Elem()
+					for i, l := 0, columnSetType.NumField(); i < l; i++ {
+						name := columnSetType.Field(i).Name
+						if columnsToCollect[name] {
+							toSet[name] = columnSetValue.FieldByName(name)
+						}
+					}
+				}
+
+				if !p2.Do(func() {
+					// assign
+					reflect.ValueOf(metaTarget).Elem().Set(meta.Elem())
+					for name, value := range toSet {
+						columnsTargetValue.FieldByName(name).Set(value)
+					}
+					// callback
+					if !cb() {
+						line.Close()
+						return
+					}
+					line.Done()
+				}) {
+					return
+				}
+
+			}) {
+				return
+			}
+
+		}
+		line.Wait()
+		line.Close()
+	}()
+
+	go p1.ParallelProcess(runtime.NumCPU())
+	p2.Process()
+
+	return line.Err
+}

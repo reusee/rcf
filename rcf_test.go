@@ -156,6 +156,29 @@ func TestBasics(t *testing.T) {
 			t.Fatal("iterrows")
 		}
 	})
+
+	t.Run("iterall", func(t *testing.T) {
+		var meta string
+		var columns struct {
+			Foo []int
+			Baz []bool
+
+			//Bar  []string
+			//Qux  [][]int
+			Quux []map[string]string
+		}
+		n := 0
+		err := f.IterAll(&meta, &columns, func() bool {
+			n++
+			return true
+		})
+		if err != nil {
+			t.Fatalf("iter all error: %v", err)
+		}
+		if n != 6 {
+			t.Fatal("iter all error")
+		}
+	})
 }
 
 func TestMeta(t *testing.T) {
@@ -204,5 +227,81 @@ func TestMeta(t *testing.T) {
 	})
 	if i != 2 {
 		t.Fatal("meta count not right")
+	}
+}
+
+func TestIterAll(t *testing.T) {
+	type Foo struct {
+		Foo  int
+		Bar  string
+		Baz  bool
+		Qux  []int
+		Quux map[string]string
+	}
+
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("rcf-test-%d", rand.Int63()))
+	var f *File
+	var err error
+
+	open := func() {
+		f, err = New(path, func(i int) (ret interface{}) {
+			switch i {
+			case 0:
+				ret = &struct {
+					Foo []int
+				}{}
+			case 1:
+				ret = &struct {
+					Bar []string
+					Baz []bool
+				}{}
+			case 2:
+				ret = &struct {
+					Qux  [][]int
+					Quux []map[string]string
+				}{}
+			}
+			return
+		})
+
+		if err != nil {
+			t.Fatalf("new: %v", err)
+		}
+	}
+	open()
+
+	for i := 0; i < 1024; i++ {
+		s := fmt.Sprintf("%d", i)
+		err = f.Append([]Foo{
+			{
+				Foo: i,
+				Bar: s,
+				Qux: []int{i},
+				Quux: map[string]string{
+					s: s,
+				},
+			},
+		}, i)
+		if err != nil {
+			t.Fatalf("append error: %v", err)
+		}
+	}
+
+	var meta int
+	var columns struct {
+		Foo  []int
+		Bar  []string
+		Qux  [][]int
+		Quux []map[string]string
+	}
+	err = f.IterAll(&meta, &columns, func() bool {
+		s := fmt.Sprintf("%d", meta)
+		if columns.Foo[0] != meta || columns.Bar[0] != s || columns.Qux[0][0] != meta || columns.Quux[0][s] != s {
+			t.Fatalf("wrong iter value %v %v", meta, columns)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatalf("iter all error %v", err)
 	}
 }
