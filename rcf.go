@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	_COMPRESS_SNAPPY = iota
+	_COMPRESS_NONE = iota
+	_COMPRESS_SNAPPY
 )
 
 type File struct {
