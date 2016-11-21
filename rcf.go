@@ -11,16 +11,22 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
+)
+
+const (
+	_COMPRESS_SNAPPY = iota
 )
 
 type File struct {
 	sync.Mutex
-	file         *os.File
-	path         string
-	colSets      [][]string
-	colSetsFn    func(int) interface{}
-	validateOnce sync.Once
+	file           *os.File
+	path           string
+	colSets        [][]string
+	colSetsFn      func(int) interface{}
+	validateOnce   sync.Once
+	compressMethod int
 }
 
 func (f *File) Sync() error {
@@ -59,6 +65,12 @@ func New(path string, colSetsFn func(int) interface{}) (*File, error) {
 		path:      path,
 		colSets:   colSets,
 		colSetsFn: colSetsFn,
+	}
+	parts := strings.Split(path, ".")
+	for _, part := range parts {
+		if part == "snappy" {
+			ret.compressMethod = _COMPRESS_SNAPPY
+		}
 	}
 	return ret, nil
 }
@@ -104,29 +116,41 @@ func (f *File) validate() (err error) {
 	return
 }
 
-func encode(o interface{}) (bs []byte, err error) {
+func (f *File) encode(o interface{}) (bs []byte, err error) {
 	buf := new(bytes.Buffer)
-	w := snappy.NewWriter(buf)
-	err = gob.NewEncoder(w).Encode(o)
-	if err != nil {
-		return nil, err
-	}
-	err = w.Close()
-	if err != nil {
-		return nil, err
+	if f.compressMethod == _COMPRESS_SNAPPY {
+		w := snappy.NewWriter(buf)
+		err = gob.NewEncoder(w).Encode(o)
+		if err != nil {
+			return nil, err
+		}
+		err = w.Close()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = gob.NewEncoder(buf).Encode(o)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return buf.Bytes(), nil
 }
 
-func decode(bs []byte, target interface{}) (err error) {
-	r := snappy.NewReader(bytes.NewReader(bs))
+func (f *File) decode(bs []byte, target interface{}) (err error) {
+	var r io.Reader
+	if f.compressMethod == _COMPRESS_SNAPPY {
+		r = snappy.NewReader(bytes.NewReader(bs))
+	} else {
+		r = bytes.NewReader(bs)
+	}
 	return gob.NewDecoder(r).Decode(target)
 }
 
 func (f *File) Append(rows, meta interface{}) error {
 	f.validate()
 	// encode meta
-	metaBin, err := encode(meta)
+	metaBin, err := f.encode(meta)
 	if err != nil {
 		return makeErr(err, "encode meta")
 	}
@@ -173,7 +197,7 @@ func (f *File) Append(rows, meta interface{}) error {
 			}
 		}
 		//t0 := time.Now()
-		bin, err := encode(&v)
+		bin, err := f.encode(&v)
 		if err != nil {
 			return makeErr(err, "encode column set")
 		}
@@ -226,7 +250,7 @@ func (f *File) IterMetas(fn interface{}) error {
 	metaType := fnType.In(0)
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(200000)
+	p1 := line.NewPipe(100000)
 	p2 := line.NewPipe(2048)
 
 	go func() {
@@ -274,7 +298,7 @@ func (f *File) IterMetas(fn interface{}) error {
 
 			if !p1.Do(func() {
 				// decode meta
-				err = decode(bs, meta.Interface())
+				err = f.decode(bs, meta.Interface())
 				if err != nil {
 					line.Error(makeErr(err, "decode meta"))
 					return
@@ -346,7 +370,7 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 	}
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(200000)
+	p1 := line.NewPipe(30000)
 	p2 := line.NewPipe(2048)
 
 	// read bytes
@@ -415,7 +439,7 @@ func (f *File) Iter(cols []string, cb func(columns ...interface{}) bool) error {
 						continue
 					}
 					s := f.colSetsFn(n)
-					err := decode(bs, &s)
+					err := f.decode(bs, &s)
 					if err != nil {
 						line.Error(makeErr(err, "decode column set"))
 						return
@@ -477,7 +501,7 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 	}
 
 	line := pipeline.NewPipeline()
-	p1 := line.NewPipe(200000)
+	p1 := line.NewPipe(30000)
 	p2 := line.NewPipe(2048)
 
 	columnsTargetValue := reflect.ValueOf(columnsTarget).Elem()
@@ -549,7 +573,7 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 			if !p1.Do(func() {
 				// decode meta
 				meta := reflect.New(reflect.TypeOf(metaTarget).Elem())
-				err = decode(metaBytes, meta.Interface())
+				err = f.decode(metaBytes, meta.Interface())
 				if err != nil {
 					line.Error(makeErr(err, "decode meta"))
 					return
@@ -562,7 +586,7 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 						continue
 					}
 					columnSet := f.colSetsFn(n)
-					err := decode(bs, &columnSet)
+					err := f.decode(bs, &columnSet)
 					if err != nil {
 						line.Error(makeErr(err, "decode column set"))
 						return
