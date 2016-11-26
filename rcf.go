@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/golang/snappy"
 	"github.com/reusee/pipeline"
+	"gopkg.in/vmihailenco/msgpack.v2"
 	"io"
 	"os"
 	"reflect"
@@ -20,6 +21,11 @@ const (
 	_COMPRESS_SNAPPY
 )
 
+const (
+	_CODEC_GOB = iota
+	_CODEC_MSGPACK
+)
+
 type File struct {
 	sync.Mutex
 	file           *os.File
@@ -28,6 +34,7 @@ type File struct {
 	colSetsFn      func(int) interface{}
 	validateOnce   sync.Once
 	compressMethod int
+	codec          int
 }
 
 func (f *File) Sync() error {
@@ -69,8 +76,11 @@ func New(path string, colSetsFn func(int) interface{}) (*File, error) {
 	}
 	parts := strings.Split(path, ".")
 	for _, part := range parts {
-		if part == "snappy" {
+		switch part {
+		case "snappy":
 			ret.compressMethod = _COMPRESS_SNAPPY
+		case "msgpack":
+			ret.codec = _CODEC_MSGPACK
 		}
 	}
 	return ret, nil
@@ -121,7 +131,11 @@ func (f *File) encode(o interface{}) (bs []byte, err error) {
 	buf := new(bytes.Buffer)
 	if f.compressMethod == _COMPRESS_SNAPPY {
 		w := snappy.NewWriter(buf)
-		err = gob.NewEncoder(w).Encode(o)
+		if f.codec == _CODEC_GOB {
+			err = gob.NewEncoder(w).Encode(o)
+		} else if f.codec == _CODEC_MSGPACK {
+			err = msgpack.NewEncoder(w).Encode(o)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +144,11 @@ func (f *File) encode(o interface{}) (bs []byte, err error) {
 			return nil, err
 		}
 	} else {
-		err = gob.NewEncoder(buf).Encode(o)
+		if f.codec == _CODEC_GOB {
+			err = gob.NewEncoder(buf).Encode(o)
+		} else if f.codec == _CODEC_MSGPACK {
+			err = msgpack.NewEncoder(buf).Encode(o)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +163,12 @@ func (f *File) decode(bs []byte, target interface{}) (err error) {
 	} else {
 		r = bytes.NewReader(bs)
 	}
-	return gob.NewDecoder(r).Decode(target)
+	if f.codec == _CODEC_GOB {
+		return gob.NewDecoder(r).Decode(target)
+	} else if f.codec == _CODEC_MSGPACK {
+		return msgpack.NewDecoder(r).Decode(target)
+	}
+	return fmt.Errorf("not reachable")
 }
 
 func (f *File) Append(rows, meta interface{}) error {
@@ -552,6 +575,9 @@ func (f *File) IterAll(metaTarget interface{}, columnsTarget interface{}, cb fun
 			// read bytes
 			var columnBytesSlice [][]byte
 			for n, l := range lens {
+				if len(lens) != len(toDecode) {
+					panic(fmt.Sprintf("lens %d toDecode %d numSets %d\n", len(lens), len(toDecode), numSets))
+				}
 				if toDecode[n] { // decode
 					bs := make([]byte, l)
 					_, err = io.ReadFull(file, bs)
